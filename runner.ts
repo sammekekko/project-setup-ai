@@ -1,130 +1,243 @@
-import { openai } from "@ai-sdk/openai";
-import { CoreMessage, streamText } from "ai";
 import dotenv from "dotenv";
-import { spawn } from "child_process";
-import * as readline from "node:readline/promises";
+import { existsSync, mkdirSync } from "fs";
+import path from "path";
+import * as os from "os";
+import { IPty, spawn } from "@lydell/node-pty";
+import { initial_plan_schema } from "./utils/schemas";
+
+/* LIB */
+import { generateCoreCommands, generateTerminalCommands } from "./lib/ai";
+
+/* PROMPTS */
+import {
+  idle_with_no_interactivity,
+  interactive_arrow_system_prompt,
+  write_inline_system_prompt,
+} from "./prompts";
+
+/* UTILS */
+import {
+  stripANSI,
+  setupLogRegex,
+  keyMap,
+  isPrompt,
+  isInteractiveMenu,
+} from "./utils/utils";
+import { TypeOf } from "zod";
 
 dotenv.config();
 
-// Create a readline interface for logging (and for optional manual input)
-const terminal = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+let coreCommands: string[] = [];
+const ranCommands: string[] = [];
+const finishedCoreCommands: string[] = [];
 
-// Set up the conversation history with a system prompt that tells the AI what its role is.
-const messages: CoreMessage[] = [
-  {
-    role: "system",
-    content:
-      "You are a helpful assistant that sets up projects based on a given description. " +
-      "You generate a list of terminal commands to create, install, and configure a project. " +
-      "When a running command outputs an interactive prompt (for example, 'Are you sure you want to do this Y/n'), " +
-      "you are also responsible for providing the correct input for that prompt.",
-  },
-];
-
-/**
- * Sends a message to the AI (adding it to the conversation history) and returns the AI’s response.
- */
-async function askAI(userInput: string): Promise<string> {
-  messages.push({ role: "user", content: userInput });
-  process.stdout.write(`\n[AI Prompt]: ${userInput}\n\nAssistant: `);
-  const result = streamText({
-    model: openai("gpt-4o-mini"),
-    messages,
-  });
-  let fullResponse = "";
-  for await (const delta of result.textStream) {
-    fullResponse += delta;
-    process.stdout.write(delta);
-  }
-  messages.push({ role: "assistant", content: fullResponse });
-  process.stdout.write("\n");
-  return fullResponse.trim();
+function run_command(terminal, input) {
+  terminal.write(input);
+  ranCommands.push(input);
 }
 
-/**
- * Executes a given shell command. If the process outputs something that looks like an interactive prompt
- * (e.g. includes "Y/n"), it will ask the AI for what to answer and send that answer to the command’s stdin.
- */
-async function executeCommand(command: string): Promise<void> {
-  console.log(`\nExecuting: ${command}\n`);
+async function executeCommandDynamic(
+  command: string,
+  guide: string,
+  terminal: IPty,
+  projectDir: string
+): Promise<void> {
+  let keystrokesActive: boolean = false;
 
-  // Spawn the command in a shell with piped stdio
-  const child = spawn(command, {
-    shell: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  // A variable to store the most recent output (without ANSI codes)
+  let latestOutput = "";
+  // A timer that will trigger after a given idle period
+  let idleTimer: NodeJS.Timeout | null = null;
+  // The idle delay (in milliseconds) to consider the output as “settled”
+  const IDLE_DELAY = 2000;
 
-  // Listen to stdout data.
-  child.stdout.on("data", async (data: Buffer) => {
-    const text = data.toString();
-    process.stdout.write(text);
-    // Check for a simple interactive prompt pattern (adjust this as needed)
-    if (text.includes("Y/n") || text.includes("y/n")) {
-      // Ask the AI what to do when a prompt appears.
-      const response = await askAI(
-        `The command "${command}" produced the prompt:\n"${text.trim()}"\nWhat should I answer?`
-      );
-      // Write the AI’s answer to the process stdin.
-      child.stdin.write(response + "\n");
+  run_command(terminal, command + "\r");
+
+  // This function ensures that interaction cues only will be used if
+  // the output has been idle for IDLE_DELAY amount of time
+  const onIdleOutput = async () => {
+    // Make sure that the AI isn't writing anything during this time
+    if (keystrokesActive) return;
+    if (isInteractiveMenu(latestOutput)) {
+      keystrokesActive = true;
+      const output_log = `The command\n"${command}\n produced the following interactive prompt:\n"${latestOutput}"\nWhat keystrokes should I use?`;
+      try {
+        const keyResponses = await generateTerminalCommands(
+          output_log,
+          guide,
+          interactive_arrow_system_prompt
+        );
+        for (const key of keyResponses) {
+          const norm = key.toLowerCase().trim();
+          await run_command(terminal, keyMap[norm] ?? key);
+        }
+      } catch (err) {
+        console.error("Error obtaining interactive keystroke:", err);
+      } finally {
+        keystrokesActive = false;
+      }
+    } else if (isPrompt(latestOutput)) {
+      keystrokesActive = true;
+      const output_log = `The command:\n'${command}' produced the following prompt:\n"${latestOutput}"\nWhat should I write?`;
+      try {
+        const responses = await generateTerminalCommands(
+          output_log,
+          guide,
+          write_inline_system_prompt
+        );
+        for (const resp of responses) {
+          run_command(terminal, resp + "\r"); // Send response + Enter
+        }
+      } catch (error) {
+        console.error("Error obtaining textual prompt response:", error);
+      } finally {
+        keystrokesActive = false;
+      }
+    } else {
+      /* If the terminal has stopped outputting for two seconds and the 'latestOutput'
+       * is not passed by any of the 'isPrompt()', or 'isInteractiveMenu()' checks
+       * it will anyways go through by sending the latestOutput awaiting instructions.
+       */
+
+      keystrokesActive = true;
+      const output_log = `The command:\n'${command}' produced the following output:\n"${stripANSI(
+        JSON.stringify(latestOutput)
+      )}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
+      if (
+        latestOutput.length === 0 ||
+        !latestOutput ||
+        latestOutput === "" ||
+        stripANSI(JSON.stringify(latestOutput)) === ""
+      ) {
+        terminal.kill();
+      }
+      try {
+        const responses = await generateTerminalCommands(
+          output_log,
+          guide,
+          idle_with_no_interactivity
+        );
+        console.log(
+          "The ai decided that this command: ",
+          responses[0],
+          "was most appropriate for this log: ",
+          JSON.stringify(latestOutput)
+        );
+        if (responses.length == 0 || !responses) {
+          /* This will start a new terminal and start executing the next command */
+          terminal.kill();
+        }
+        for (const resp of responses) {
+          run_command(terminal, resp + "\r"); // Send response + Enter
+          // console.log("Response sent", resp, "for this output:", latestOutput);
+        }
+      } catch (error) {
+        console.error("Error obtaining textual prompt response:", error);
+      } finally {
+        keystrokesActive = false;
+      }
     }
-  });
 
-  // Also listen to stderr data.
-  child.stderr.on("data", async (data: Buffer) => {
-    const text = data.toString();
-    process.stderr.write(text);
-    if (text.includes("Y/n") || text.includes("y/n")) {
-      const response = await askAI(
-        `The command "${command}" produced an error prompt:\n"${text.trim()}"\nWhat should I answer?`
-      );
-      child.stdin.write(response + "\n");
+    // Clear the latest output after processing.
+    latestOutput = "";
+  };
+
+  // Listen to terminal data events.
+  terminal.onData(async (data) => {
+    // If a keystroke sequence is already active, ignore new data.
+    if (keystrokesActive) {
+      return;
     }
+    const output = stripANSI(data);
+    console.log(data);
+
+    const lines = output.split("\n");
+    const filtered = lines.filter((line) => !setupLogRegex.test(line));
+
+    if (filtered.join("\n") != "") {
+      latestOutput += filtered;
+    } else {
+      latestOutput =
+        "```LOGS WERE FILTERED BUT INSTALL SCRIPT ARE RUNNING / ARE DONE```";
+    }
+
+    // Clear any pending idle timer because we just got new output.
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+
+    idleTimer = setTimeout(onIdleOutput, IDLE_DELAY);
   });
 
-  // Return a promise that resolves when the command finishes.
-  return new Promise((resolve, reject) => {
-    child.on("close", (code) => {
-      console.log(`\nCommand "${command}" finished with exit code ${code}\n`);
+  // Finish when the shell session ends.
+  return new Promise<void>((resolve) => {
+    terminal.onExit((code) => {
+      const exitText = `\nCommand "${command}" exited with code ${code.exitCode}\n`;
+      console.log(exitText);
+      finishedCoreCommands.push(exitText);
+      // Clear the timer if still pending.
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+      }
       resolve();
     });
-    child.on("error", (err) => {
-      console.error(`Error executing command "${command}": ${err}`);
-      reject(err);
-    });
   });
 }
 
 /**
- * Main entry point: given a project description, ask the AI to generate a list of terminal commands
- * and execute them one by one.
+ * Main entry point.
+ * Given a project description, this function:
+ *   1. Creates a new project directory outside your code.
+ *   2. Writes initial files in project folder
+ *   3. Asks the AI for a list of terminal commands to set up the project.
+ *   4. Executes each command in the project directory.
+ *   5. Uses cues to figure out if interactive actions are needed.
  */
+
+function spawn_terminal(projectDir): IPty {
+  const shell =
+    os.platform() === "win32"
+      ? process.env.COMSPEC || "cmd.exe"
+      : process.env.SHELL || "/bin/bash";
+
+  return spawn(shell, [], {
+    cwd: projectDir,
+    name: "project-builder",
+    cols: 100,
+    rows: 50,
+  });
+}
+
 async function main(project_description: string) {
-  // Ask the AI for a plan. We instruct it to return one command per line (no extra explanation).
-  const prompt =
-    `Set up a project with the following description: "${project_description}". ` +
-    "Provide a list of terminal commands to execute (one per line) that will initialize and configure the project. " +
-    "Do not include any extra explanation. Always begin by creating a new directory for the project.";
-  const plan = await askAI(prompt);
+  // Create a new directory for the project.
+  const projectDir = path.resolve(process.cwd(), "generated-project");
+  if (!existsSync(projectDir)) {
+    console.log(`Creating project directory at: ${projectDir}`);
+    mkdirSync(projectDir, { recursive: true });
+  } else {
+    console.log(`Project directory already exists at: ${projectDir}`);
+  }
 
-  // Split the AI's response into individual commands (assumes one command per line).
-  const commands = plan
-    .split("\n")
-    .map((cmd) => cmd.trim())
-    .filter((cmd) => cmd !== "");
+  const object = (await generateCoreCommands(project_description)) as TypeOf<
+    typeof initial_plan_schema
+  >;
+  coreCommands = object.core_commands;
+  const guide = object.initial_plan;
 
-  // Execute each command sequentially.
-  for (const command of commands) {
-    await executeCommand(command);
+  console.log(guide);
+  console.log(coreCommands);
+
+  // Execute each command sequentially in the project directory.
+  for (const command of coreCommands) {
+    const terminal = spawn_terminal(projectDir);
+    await executeCommandDynamic(command, guide, terminal, projectDir);
   }
 
   console.log("Project setup complete!");
 }
 
 // Retrieve the project description from a command line argument.
-const projectDescription = process.argv[2];
+const projectDescription = process.argv.slice(2).join(" ");
 if (!projectDescription) {
   console.error(
     "Please provide a project description as a command line argument."
