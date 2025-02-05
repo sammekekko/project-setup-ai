@@ -4,9 +4,10 @@ import path from "path";
 import * as os from "os";
 import { IPty, spawn } from "@lydell/node-pty";
 import { initial_plan_schema } from "./utils/schemas";
+import { TypeOf } from "zod";
 
-/* LIB */
-import { generateCoreCommands, generateTerminalCommands } from "./lib/ai";
+/* LIBRARIES */
+import { generate_core_commands, generate_terminal_commands } from "./lib/ai";
 
 /* PROMPTS */
 import {
@@ -17,26 +18,25 @@ import {
 
 /* UTILS */
 import {
-  stripANSI,
-  setupLogRegex,
-  keyMap,
-  isPrompt,
-  isInteractiveMenu,
+  strip_ansi,
+  setup_log_regex,
+  key_map,
+  is_prompt,
+  is_interactive_menu,
 } from "./utils/utils";
-import { TypeOf } from "zod";
 
 dotenv.config();
 
-let coreCommands: string[] = [];
-const ranCommands: string[] = [];
-const finishedCoreCommands: string[] = [];
+let core_commands: string[] = [];
+const ran_commands: string[] = [];
+const finished_core_commands: string[] = [];
 
-function run_command(terminal, input) {
+function run_command(terminal: IPty, input: string) {
   terminal.write(input);
-  ranCommands.push(input);
+  ran_commands.push(input);
 }
 
-async function executeCommandDynamic(
+async function execute_command_dynamically(
   command: string,
   guide: string,
   terminal: IPty,
@@ -45,11 +45,12 @@ async function executeCommandDynamic(
   let keystrokesActive: boolean = false;
 
   // A variable to store the most recent output (without ANSI codes)
-  let latestOutput = "";
+  let latest_output = "";
+  let latest_command = command;
   // A timer that will trigger after a given idle period
-  let idleTimer: NodeJS.Timeout | null = null;
+  let idle_timer: NodeJS.Timeout | null = null;
   // The idle delay (in milliseconds) to consider the output as “settled”
-  const IDLE_DELAY = 2000;
+  const idle_delay = 2000;
 
   run_command(terminal, command + "\r");
 
@@ -58,35 +59,36 @@ async function executeCommandDynamic(
   const onIdleOutput = async () => {
     // Make sure that the AI isn't writing anything during this time
     if (keystrokesActive) return;
-    if (isInteractiveMenu(latestOutput)) {
+    if (is_interactive_menu(latest_output)) {
       keystrokesActive = true;
-      const output_log = `The command\n"${command}\n produced the following interactive prompt:\n"${latestOutput}"\nWhat keystrokes should I use?`;
+      const output_log = `The command\n"${latest_command}\n produced the following interactive prompt:\n"${latest_output}"\nWhat keystrokes should I use?`;
       try {
-        const keyResponses = await generateTerminalCommands(
+        const keyResponses = await generate_terminal_commands(
           output_log,
           guide,
           interactive_arrow_system_prompt
         );
         for (const key of keyResponses) {
           const norm = key.toLowerCase().trim();
-          await run_command(terminal, keyMap[norm] ?? key);
+          await run_command(terminal, key_map[norm] ?? key);
         }
       } catch (err) {
         console.error("Error obtaining interactive keystroke:", err);
       } finally {
         keystrokesActive = false;
       }
-    } else if (isPrompt(latestOutput)) {
+    } else if (is_prompt(latest_output)) {
       keystrokesActive = true;
-      const output_log = `The command:\n'${command}' produced the following prompt:\n"${latestOutput}"\nWhat should I write?`;
+      const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${latest_output}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
       try {
-        const responses = await generateTerminalCommands(
+        const responses = await generate_terminal_commands(
           output_log,
           guide,
           write_inline_system_prompt
         );
         for (const resp of responses) {
           run_command(terminal, resp + "\r"); // Send response + Enter
+          latest_command = resp;
         }
       } catch (error) {
         console.error("Error obtaining textual prompt response:", error);
@@ -100,28 +102,22 @@ async function executeCommandDynamic(
        */
 
       keystrokesActive = true;
-      const output_log = `The command:\n'${command}' produced the following output:\n"${stripANSI(
-        JSON.stringify(latestOutput)
+      const output_log = `The command:\n'${latest_command}' produced the following output:\n"${strip_ansi(
+        JSON.stringify(latest_output)
       )}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
       if (
-        latestOutput.length === 0 ||
-        !latestOutput ||
-        latestOutput === "" ||
-        stripANSI(JSON.stringify(latestOutput)) === ""
+        latest_output.length === 0 ||
+        !latest_output ||
+        latest_output === "" ||
+        strip_ansi(JSON.stringify(latest_output)) === ""
       ) {
         terminal.kill();
       }
       try {
-        const responses = await generateTerminalCommands(
+        const responses = await generate_terminal_commands(
           output_log,
           guide,
           idle_with_no_interactivity
-        );
-        console.log(
-          "The ai decided that this command: ",
-          responses[0],
-          "was most appropriate for this log: ",
-          JSON.stringify(latestOutput)
         );
         if (responses.length == 0 || !responses) {
           /* This will start a new terminal and start executing the next command */
@@ -129,6 +125,7 @@ async function executeCommandDynamic(
         }
         for (const resp of responses) {
           run_command(terminal, resp + "\r"); // Send response + Enter
+          latest_command = resp;
           // console.log("Response sent", resp, "for this output:", latestOutput);
         }
       } catch (error) {
@@ -139,7 +136,7 @@ async function executeCommandDynamic(
     }
 
     // Clear the latest output after processing.
-    latestOutput = "";
+    latest_output = "";
   };
 
   // Listen to terminal data events.
@@ -148,25 +145,25 @@ async function executeCommandDynamic(
     if (keystrokesActive) {
       return;
     }
-    const output = stripANSI(data);
+    const output = strip_ansi(data);
     console.log(data);
 
     const lines = output.split("\n");
-    const filtered = lines.filter((line) => !setupLogRegex.test(line));
+    const filtered = lines.filter((line) => !setup_log_regex.test(line));
 
     if (filtered.join("\n") != "") {
-      latestOutput += filtered;
+      latest_output += filtered;
     } else {
-      latestOutput =
+      latest_output =
         "```LOGS WERE FILTERED BUT INSTALL SCRIPT ARE RUNNING / ARE DONE```";
     }
 
     // Clear any pending idle timer because we just got new output.
-    if (idleTimer) {
-      clearTimeout(idleTimer);
+    if (idle_timer) {
+      clearTimeout(idle_timer);
     }
 
-    idleTimer = setTimeout(onIdleOutput, IDLE_DELAY);
+    idle_timer = setTimeout(onIdleOutput, idle_delay);
   });
 
   // Finish when the shell session ends.
@@ -174,10 +171,10 @@ async function executeCommandDynamic(
     terminal.onExit((code) => {
       const exitText = `\nCommand "${command}" exited with code ${code.exitCode}\n`;
       console.log(exitText);
-      finishedCoreCommands.push(exitText);
+      finished_core_commands.push(exitText);
       // Clear the timer if still pending.
-      if (idleTimer) {
-        clearTimeout(idleTimer);
+      if (idle_timer) {
+        clearTimeout(idle_timer);
       }
       resolve();
     });
@@ -188,13 +185,13 @@ async function executeCommandDynamic(
  * Main entry point.
  * Given a project description, this function:
  *   1. Creates a new project directory outside your code.
- *   2. Writes initial files in project folder
+ *   2. Writes initial files in project folder (not yet)
  *   3. Asks the AI for a list of terminal commands to set up the project.
  *   4. Executes each command in the project directory.
  *   5. Uses cues to figure out if interactive actions are needed.
  */
 
-function spawn_terminal(projectDir): IPty {
+function spawn_terminal(projectDir: string): IPty {
   const shell =
     os.platform() === "win32"
       ? process.env.COMSPEC || "cmd.exe"
@@ -210,42 +207,42 @@ function spawn_terminal(projectDir): IPty {
 
 async function main(project_description: string) {
   // Create a new directory for the project.
-  const projectDir = path.resolve(process.cwd(), "generated-project");
-  if (!existsSync(projectDir)) {
-    console.log(`Creating project directory at: ${projectDir}`);
-    mkdirSync(projectDir, { recursive: true });
+  const project_dir = path.resolve(process.cwd(), "generated-project");
+  if (!existsSync(project_dir)) {
+    console.log(`Creating project directory at: ${project_dir}`);
+    mkdirSync(project_dir, { recursive: true });
   } else {
-    console.log(`Project directory already exists at: ${projectDir}`);
+    console.log(`Project directory already exists at: ${project_dir}`);
   }
 
-  const object = (await generateCoreCommands(project_description)) as TypeOf<
+  const object = (await generate_core_commands(project_description)) as TypeOf<
     typeof initial_plan_schema
   >;
-  coreCommands = object.core_commands;
+  core_commands = object.core_commands;
   const guide = object.initial_plan;
 
   console.log(guide);
-  console.log(coreCommands);
+  console.log(core_commands);
 
   // Execute each command sequentially in the project directory.
-  for (const command of coreCommands) {
-    const terminal = spawn_terminal(projectDir);
-    await executeCommandDynamic(command, guide, terminal, projectDir);
+  for (const command of core_commands) {
+    const terminal = spawn_terminal(project_dir as string);
+    await execute_command_dynamically(command, guide, terminal, project_dir);
   }
 
   console.log("Project setup complete!");
 }
 
 // Retrieve the project description from a command line argument.
-const projectDescription = process.argv.slice(2).join(" ");
-if (!projectDescription) {
+const project_description = process.argv.slice(2).join(" ");
+if (!project_description) {
   console.error(
     "Please provide a project description as a command line argument."
   );
   process.exit(1);
 }
 
-main(projectDescription).catch((err) => {
+main(project_description).catch((err) => {
   console.error("Error during project setup:", err);
   process.exit(1);
 });

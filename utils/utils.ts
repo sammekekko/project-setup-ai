@@ -1,8 +1,8 @@
-export function stripANSI(str: string): string {
+export function strip_ansi(str: string): string {
   return str.replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, "");
 }
 
-export const setupLogRegex = new RegExp(
+export const setup_log_regex = new RegExp(
   [
     "^(?:",
     ".*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*", // Spinner chars
@@ -16,7 +16,7 @@ export const setupLogRegex = new RegExp(
 );
 
 // Keymap used for interactions sent by the AI
-export const keyMap: Record<string, string> = {
+export const key_map: Record<string, string> = {
   up: "\x1B[A",
   down: "\x1B[B",
   left: "\x1B[D",
@@ -28,10 +28,10 @@ export const keyMap: Record<string, string> = {
  * Determines whether the prompt text indicates an interactive menu
  * that likely requires keystroke (arrow key) navigation.
  */
-export function isInteractiveMenu(text: string): boolean {
+export function is_interactive_menu(text: string): boolean {
   const lower = text.toLowerCase();
   // Check for common interactive menu cues (adjust as needed)
-  const interactiveCues = [
+  const interactive_cues = [
     "arrow",
     "use arrow",
     "navigate with",
@@ -46,11 +46,11 @@ export function isInteractiveMenu(text: string): boolean {
     "return to submit",
   ];
 
-  return interactiveCues.some((cue) => lower.includes(cue));
+  return interactive_cues.some((cue) => lower.includes(cue));
 }
 
 // Helper function to detect if the given text is an interactive prompt.
-export function isPrompt(text: string): boolean {
+export function is_prompt(text: string): boolean {
   const trimmed = text.trim();
   const lowerText = trimmed.toLowerCase();
   // Check if the text starts or ends with a question mark

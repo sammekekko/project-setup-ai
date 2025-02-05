@@ -1,15 +1,21 @@
 {
-	"dependencies": {
-		"@ai-sdk/openai": "^1.1.9",
-		"@ai-sdk/openai-compatible": "^0.1.8",
-		"@lydell/node-pty": "^1.1.0",
-		"ai": "^4.1.17",
-		"dotenv": "^16.4.7",
-		"zod": "^3.24.1"
-	},
-	"devDependencies": {
-		"@types/node": "^22.13.0",
-		"tsx": "^4.19.2",
-		"typescript": "^5.7.3"
-	}
+  "name": "project-setup-ai-runner",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/openai": "^1.1.9",
+    "@ai-sdk/openai-compatible": "^0.1.8",
+    "@lydell/node-pty": "^1.1.0",
+    "ai": "^4.1.17",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1"
+  },
+  "scripts": {
+    "start": "npx tsx runner.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
 }

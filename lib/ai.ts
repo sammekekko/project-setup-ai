@@ -2,10 +2,12 @@ import { openai } from "@ai-sdk/openai";
 import { generateObject, AISDKError, LanguageModelV1 } from "ai";
 import { system_prompt, initial_plan_prompt } from "./prompts";
 import { initial_plan_schema, terminal_input_schema } from "../utils/schemas";
+import * as fs from "fs";
+import * as path from "path";
 
 const model: LanguageModelV1 = openai("gpt-4o-2024-11-20");
 
-export async function generateCoreCommands(input: string): Promise<object> {
+export async function generate_core_commands(input: string): Promise<object> {
   try {
     const result = await generateObject({
       model,
@@ -27,7 +29,7 @@ export async function generateCoreCommands(input: string): Promise<object> {
   }
 }
 
-export async function generateTerminalCommands(
+export async function generate_terminal_commands(
   input: string,
   guide: string,
   prompt_injection: string
@@ -43,6 +45,25 @@ export async function generateTerminalCommands(
         "An array of strings that will be executed in the terminal",
     });
     let commands = object.object.terminal_input || [];
+
+    async function log_commands(
+      input: string,
+      commands: string[]
+    ): Promise<void> {
+      const logDirPath = path.dirname(
+        `/Users/samuelkekkonen/Offline Documents/business-projects/production/stackguide/project-setup-ai/generated-project/`
+      );
+      const logFilePath = path.join(logDirPath, "log.txt");
+
+      // Ensure the directory exists
+      // await fs.promises.mkdir(logDirPath, { recursive: true });
+
+      const logEntry = `Input: ${input}\nCommands: ${commands.join(", ")}\n\n`;
+
+      await fs.promises.appendFile(logFilePath, logEntry, "utf8");
+    }
+
+    log_commands(input, commands);
 
     return commands;
   } catch (error) {
