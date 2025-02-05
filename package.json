@@ -11,7 +11,8 @@
     "zod": "^3.24.1"
   },
   "scripts": {
-    "start": "npx tsx runner.ts"
+    "start": "npx tsx runner.ts",
+    "test": "sh -c 'npx tsx tests/$1' --"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
