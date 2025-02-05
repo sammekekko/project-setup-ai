@@ -13,7 +13,7 @@ import {
   idle_with_no_interactivity,
   interactive_arrow_system_prompt,
   write_inline_system_prompt,
-} from "./prompts";
+} from "./lib/prompts";
 
 /* UTILS */
 import {

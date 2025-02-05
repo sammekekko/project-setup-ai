@@ -1,6 +1,6 @@
 import { openai } from "@ai-sdk/openai";
 import { generateObject, AISDKError, LanguageModelV1 } from "ai";
-import { system_prompt, initial_plan_prompt } from "../prompts";
+import { system_prompt, initial_plan_prompt } from "./prompts";
 import { initial_plan_schema, terminal_input_schema } from "../utils/schemas";
 
 const model: LanguageModelV1 = openai("gpt-4o-2024-11-20");
