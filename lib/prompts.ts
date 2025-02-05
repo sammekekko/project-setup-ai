@@ -6,17 +6,17 @@ export const initial_plan_prompt = `Provide a list of terminal commands to execu
   
   # Example of commands for a 'Next Application with Animations'.
   - 'npx create-next-app@latest'
-  - 'npm install framer-motion'
+  - 'pnpm install framer-motion'
   - ... and many more that would be essential for this project
 
   # Guide structure:
   - Keep it concise
   - Make it clear so that the other AI agents understand the purpose of this project
   - Make a clear list of prohibited commands, such as (pnpm run dev)
-  - Make it clear what package manager that will be used (pip, npm, pnpm, or whatever fits best)
+  - Make it clear what package manager that will be used (pip, pnpm, or whatever fits best) Always use pnpm over npm
 
   # Important notes
-  - When running setup commands for frameworks or libraries such as vite, there will be options during the setup to choose the right framework (React, Vue, etc). Therefore you should not provide these in the coreCommands list.
+  - When running setup commands for frameworks or libraries such as vite, there will be options during the setup to choose the right framework (React, Vue, etc). Therefore you should not provide these in the coreCommands list. Never use npm, always choose pnpm over this one.
   `;
 
 export const interactive_arrow_system_prompt = `To navigate through some interactive prompts, you shall return an array of keystroke instructions (e.g. ["down", "enter"]) to select the appropriate option. It is very important that these instructions are in seperate strings and not in a single string.`;
