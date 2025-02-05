@@ -1,5 +1,74 @@
+import path from "path";
+import fs from "fs";
+
 export function strip_ansi(str: string): string {
   return str.replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, "");
+}
+
+export function get_dependency_names(
+  project_directory
+):
+  | { dependencies: string[]; dev_dependencies: string[] }
+  | { error: string | Error } {
+  let package_json_path = path.join(project_directory, "package.json");
+  let package_data: any;
+
+  // If package.json is not in the root, search immediate subdirectories.
+  if (!fs.existsSync(package_json_path)) {
+    const entries = fs.readdirSync(project_directory, { withFileTypes: true });
+    let found = false;
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const candidate = path.join(
+          project_directory,
+          entry.name,
+          "package.json"
+        );
+        if (fs.existsSync(candidate)) {
+          package_json_path = candidate;
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) {
+      const error_text = "Package.json has not been built yet.";
+      console.error(error_text);
+      return { error: error_text };
+    }
+  }
+
+  try {
+    // Read and parse package.json
+    package_data = JSON.parse(fs.readFileSync(package_json_path, "utf-8"));
+  } catch (error) {
+    const error_text = "Package.json could not be read.";
+    return { error: error_text };
+  }
+
+  // Get the dependency names or use empty arrays if they don't exist
+  const dependencies = package_data.dependencies
+    ? Object.keys(package_data.dependencies)
+    : [];
+  const dev_dependencies = package_data.devDependencies
+    ? Object.keys(package_data.devDependencies)
+    : [];
+
+  return { dependencies, dev_dependencies };
+}
+
+export function prepare_dependency_names(dependencies) {
+  let output: string;
+  if (!dependencies) {
+    throw new Error("Failed to get dependency names");
+  }
+
+  if ("error" in dependencies) {
+    output = dependencies.error;
+  }
+
+  output = JSON.stringify(dependencies);
+  return output;
 }
 
 export const setup_log_regex = new RegExp(
