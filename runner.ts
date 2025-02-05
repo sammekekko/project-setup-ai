@@ -27,9 +27,9 @@ import {
 
 dotenv.config();
 
-let core_commands: string[] = [];
-const ran_commands: string[] = [];
-const finished_core_commands: string[] = [];
+export let core_commands: string[] = [];
+export const ran_commands: string[] = [];
+export const finished_core_commands: string[] = [];
 
 function run_command(terminal: IPty, input: string) {
   terminal.write(input);
@@ -61,11 +61,14 @@ async function execute_command_dynamically(
     if (keystrokesActive) return;
     if (is_interactive_menu(latest_output)) {
       keystrokesActive = true;
-      const output_log = `The command\n"${latest_command}\n produced the following interactive prompt:\n"${latest_output}"\nWhat keystrokes should I use?`;
+      const output_log = `The command\n"${latest_command}\n produced the following interactive prompt:\n"${strip_ansi(
+        JSON.stringify(latest_output)
+      )}"\nWhat keystrokes should I use?`;
       try {
         const keyResponses = await generate_terminal_commands(
           output_log,
           guide,
+          projectDir,
           interactive_arrow_system_prompt
         );
         for (const key of keyResponses) {
@@ -79,11 +82,14 @@ async function execute_command_dynamically(
       }
     } else if (is_prompt(latest_output)) {
       keystrokesActive = true;
-      const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${latest_output}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
+      const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${strip_ansi(
+        JSON.stringify(latest_output)
+      )}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
       try {
         const responses = await generate_terminal_commands(
           output_log,
           guide,
+          projectDir,
           write_inline_system_prompt
         );
         for (const resp of responses) {
@@ -105,21 +111,17 @@ async function execute_command_dynamically(
       const output_log = `The command:\n'${latest_command}' produced the following output:\n"${strip_ansi(
         JSON.stringify(latest_output)
       )}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
-      if (
-        latest_output.length === 0 ||
-        !latest_output ||
-        latest_output === "" ||
-        strip_ansi(JSON.stringify(latest_output)) === ""
-      ) {
+      if (latest_command === "") {
         terminal.kill();
       }
       try {
         const responses = await generate_terminal_commands(
           output_log,
           guide,
+          projectDir,
           idle_with_no_interactivity
         );
-        if (responses.length == 0 || !responses) {
+        if (responses.length == 0 || !responses || responses[0] == "") {
           /* This will start a new terminal and start executing the next command */
           terminal.kill();
         }
