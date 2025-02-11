@@ -96,11 +96,14 @@ export async function create_and_start_docker_container(
  * attach listeners or otherwise control it if needed.
  */
 export function spawn_docker_terminal(containerName: string): IPty {
-  return spawn("docker", ["exec", "-i", containerName, "/bin/sh"], {
-    cwd: process.cwd(),
-    name: "docker-terminal",
-    cols: 100,
-    rows: 50,
-    env: process.env,
-  });
+  return spawn(
+    "docker",
+    ["exec", "-i", "-w", "/app", containerName, "/bin/sh"],
+    {
+      name: "docker-terminal",
+      cols: 100,
+      rows: 50,
+      env: process.env,
+    }
+  );
 }

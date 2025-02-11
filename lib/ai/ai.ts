@@ -1,4 +1,6 @@
 import { openai } from "@ai-sdk/openai";
+import { google } from "@ai-sdk/google";
+
 import { generateObject, AISDKError, LanguageModelV1 } from "ai";
 import { system_prompt, initial_plan_prompt } from "./prompts";
 import {
@@ -15,6 +17,7 @@ import * as path from "path";
 import { get_context } from "./embeddings/embedding_manager";
 
 const model: LanguageModelV1 = openai("gpt-4o-2024-11-20");
+// const model = google("learnlm-1.5-pro-experimental");
 
 export async function generate_core_commands(input: string): Promise<object> {
   const library_context = await get_context(input);
@@ -52,10 +55,11 @@ export async function generate_terminal_commands(
         dependencies: string[];
         dev_dependencies: string[];
       }
-    | { error: string | Error } = await get_dependency_names(project_directory);
-
+    | { error: string | Error } = await get_dependency_names(
+    path.join(project_directory)
+  );
   const dependency_output = prepare_dependency_names(all_dependencies);
-  console.log(dependency_output);
+  console.log(project_directory);
 
   try {
     const object = await generateObject({

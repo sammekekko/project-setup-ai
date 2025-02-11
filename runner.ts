@@ -38,7 +38,33 @@ export let core_commands: string[] = [];
 export const ran_commands: string[] = [];
 export const finished_core_commands: string[] = [];
 
+let current_dir: string;
+
+// Update the current directory if the command is a "cd" command.
+function update_current_dir(command: string): void {
+  console.log("Updating current div");
+  console.log("Starts with CD: ", command.startsWith("cd "));
+  const trimmed = command.trim();
+  if (trimmed.startsWith("cd ")) {
+    // Extract the directory from the command.
+    const target_dir = trimmed.slice(3).trim();
+    // Update current_dir: if targetDir is relative, resolve it against current_dir.
+    const new_dir = path.resolve(current_dir, target_dir);
+
+    if (existsSync(new_dir)) {
+      console.log(`Changing directory to: ${new_dir}`);
+      current_dir = new_dir;
+    } else {
+      console.error(
+        `cd command failed: Directory "${new_dir}" does not exist.`
+      );
+      // Optionally, you can choose to leave currentDir unchanged or handle the error differently.
+    }
+  }
+}
+
 function run_command(terminal: IPty, input: string) {
+  update_current_dir(input);
   terminal.write(input);
   ran_commands.push(input);
 }
@@ -79,7 +105,7 @@ async function execute_command_dynamically(
         const keyResponses = await generate_terminal_commands(
           output_log,
           guide,
-          process.cwd(),
+          current_dir,
           interactive_arrow_system_prompt
         );
         for (const key of keyResponses) {
@@ -95,12 +121,12 @@ async function execute_command_dynamically(
       keystrokesActive = true;
       const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${strip_ansi(
         JSON.stringify(latest_output)
-      )}"\nAnd you are currently writing in this directory: ${process.cwd()}\nWhat should I write?`;
+      )}"\nAnd you are currently writing in this directory: ${current_dir}\nWhat should I write?`;
       try {
         const responses = await generate_terminal_commands(
           output_log,
           guide,
-          process.cwd(),
+          current_dir,
           write_inline_system_prompt
         );
         for (const resp of responses) {
@@ -121,7 +147,7 @@ async function execute_command_dynamically(
       keystrokesActive = true;
       const output_log = `The command:\n'${latest_command}' produced the following output:\n"${strip_ansi(
         JSON.stringify(latest_output)
-      )}"\nAnd you are currently writing in this directory: ${process.cwd()}\nWhat should I write?`;
+      )}"\nAnd you are currently writing in this directory: ${current_dir}\nWhat should I write?`;
       if (latest_command === "") {
         terminal.kill();
       }
@@ -129,7 +155,7 @@ async function execute_command_dynamically(
         const responses = await generate_terminal_commands(
           output_log,
           guide,
-          process.cwd(),
+          current_dir,
           idle_with_no_interactivity
         );
         if (responses.length == 0 || !responses || responses[0] == "") {
@@ -155,11 +181,11 @@ async function execute_command_dynamically(
   // Listen to terminal data events.
   terminal.onData(async (data) => {
     // If a keystroke sequence is already active, ignore new data.
+    console.log(data);
     if (keystrokesActive) {
       return;
     }
     const output = strip_ansi(data);
-    console.log(data);
 
     const lines = output.split("\n");
     const filtered = lines.filter((line) => !setup_log_regex.test(line));
@@ -214,6 +240,8 @@ async function main(project_description: string) {
     console.log(`Project directory already exists at: ${project_dir}`);
   }
 
+  current_dir = project_dir;
+
   // Create and start the Docker container
   let container_name: string;
   try {
@@ -247,7 +275,7 @@ async function main(project_description: string) {
 
   // Execute each command sequentially in the project directory
   for (const command of core_commands) {
-    const current_dependencies = await get_dependency_names(project_dir);
+    const current_dependencies = await get_dependency_names(current_dir);
 
     // Check for error in getting dependencies
     if (
