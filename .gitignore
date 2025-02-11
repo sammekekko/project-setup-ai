@@ -1,5 +1,6 @@
 /generated-project
 /log.txt
+/resources/embeddings.json
 /node_modules
 .DS_Store
 .env

@@ -1,20 +1,26 @@
 import dotenv from "dotenv";
 import { existsSync, mkdirSync } from "fs";
 import path from "path";
-import * as os from "os";
-import { IPty, spawn } from "@lydell/node-pty";
 import { initial_plan_schema } from "./utils/schemas";
 import { TypeOf } from "zod";
+import {
+  spawn_docker_terminal,
+  create_and_start_docker_container,
+} from "./docker/docker";
+import { IPty } from "@lydell/node-pty";
 
 /* LIBRARIES */
-import { generate_core_commands, generate_terminal_commands } from "./lib/ai";
+import {
+  generate_core_commands,
+  generate_terminal_commands,
+} from "./lib/ai/ai";
 
 /* PROMPTS */
 import {
   idle_with_no_interactivity,
   interactive_arrow_system_prompt,
   write_inline_system_prompt,
-} from "./lib/prompts";
+} from "./lib/ai/prompts";
 
 /* UTILS */
 import {
@@ -23,6 +29,7 @@ import {
   key_map,
   is_prompt,
   is_interactive_menu,
+  get_dependency_names,
 } from "./utils/utils";
 
 dotenv.config();
@@ -35,6 +42,10 @@ function run_command(terminal: IPty, input: string) {
   terminal.write(input);
   ran_commands.push(input);
 }
+
+/**
+ * Writes a command to the terminal and logs it.
+ */
 
 async function execute_command_dynamically(
   command: string,
@@ -68,7 +79,7 @@ async function execute_command_dynamically(
         const keyResponses = await generate_terminal_commands(
           output_log,
           guide,
-          projectDir,
+          process.cwd(),
           interactive_arrow_system_prompt
         );
         for (const key of keyResponses) {
@@ -84,12 +95,12 @@ async function execute_command_dynamically(
       keystrokesActive = true;
       const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${strip_ansi(
         JSON.stringify(latest_output)
-      )}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
+      )}"\nAnd you are currently writing in this directory: ${process.cwd()}\nWhat should I write?`;
       try {
         const responses = await generate_terminal_commands(
           output_log,
           guide,
-          projectDir,
+          process.cwd(),
           write_inline_system_prompt
         );
         for (const resp of responses) {
@@ -110,7 +121,7 @@ async function execute_command_dynamically(
       keystrokesActive = true;
       const output_log = `The command:\n'${latest_command}' produced the following output:\n"${strip_ansi(
         JSON.stringify(latest_output)
-      )}"\nAnd you are currently writing in this directory: ${projectDir}\nWhat should I write?`;
+      )}"\nAnd you are currently writing in this directory: ${process.cwd()}\nWhat should I write?`;
       if (latest_command === "") {
         terminal.kill();
       }
@@ -118,7 +129,7 @@ async function execute_command_dynamically(
         const responses = await generate_terminal_commands(
           output_log,
           guide,
-          projectDir,
+          process.cwd(),
           idle_with_no_interactivity
         );
         if (responses.length == 0 || !responses || responses[0] == "") {
@@ -193,22 +204,8 @@ async function execute_command_dynamically(
  *   5. Uses cues to figure out if interactive actions are needed.
  */
 
-function spawn_terminal(projectDir: string): IPty {
-  const shell =
-    os.platform() === "win32"
-      ? process.env.COMSPEC || "cmd.exe"
-      : process.env.SHELL || "/bin/bash";
-
-  return spawn(shell, [], {
-    cwd: projectDir,
-    name: "project-builder",
-    cols: 100,
-    rows: 50,
-  });
-}
-
 async function main(project_description: string) {
-  // Create a new directory for the project.
+  // Create the project directory
   const project_dir = path.resolve(process.cwd(), "generated-project");
   if (!existsSync(project_dir)) {
     console.log(`Creating project directory at: ${project_dir}`);
@@ -217,18 +214,68 @@ async function main(project_description: string) {
     console.log(`Project directory already exists at: ${project_dir}`);
   }
 
+  // Create and start the Docker container
+  let container_name: string;
+  try {
+    container_name = await create_and_start_docker_container(project_dir);
+  } catch (err) {
+    console.error("Error setting up Docker container:", err);
+    process.exit(1);
+  }
+
   const object = (await generate_core_commands(project_description)) as TypeOf<
     typeof initial_plan_schema
   >;
   core_commands = object.core_commands;
   const guide = object.initial_plan;
 
-  console.log(guide);
-  console.log(core_commands);
+  console.log("Guide:", guide);
+  console.log("Core Commands:", core_commands);
 
-  // Execute each command sequentially in the project directory.
+  // First check if the command is a package installation command
+  function is_install_command(command: string): boolean {
+    return command.match(/^(npm|pnpm|yarn|pip) (i|install|add) /) !== null;
+  }
+
+  // Extract package name from install command
+  function extract_package_name(command: string): string {
+    const matches = command.match(
+      /^(?:npm|pnpm|yarn|pip) (?:i|install|add) ([@\w\/-]+)(?:@\S+)?/
+    );
+    return matches ? matches[1] : "";
+  }
+
+  // Execute each command sequentially in the project directory
   for (const command of core_commands) {
-    const terminal = spawn_terminal(project_dir as string);
+    const current_dependencies = await get_dependency_names(project_dir);
+
+    // Check for error in getting dependencies
+    if (
+      "error" in current_dependencies &&
+      current_dependencies instanceof Error
+    ) {
+      console.error(current_dependencies.error);
+      continue;
+    }
+
+    // If it's an install command, check if package is already installed
+    if (is_install_command(command) && !("error" in current_dependencies)) {
+      const package_name = extract_package_name(command);
+      const all_deps = [
+        ...current_dependencies.dependencies,
+        ...current_dependencies.dev_dependencies,
+      ];
+
+      if (all_deps.includes(package_name)) {
+        console.log(
+          `Skipping installation of ${package_name} - already installed`
+        );
+        continue;
+      }
+    }
+
+    // Use the container_name instead of project_dir when spawning the terminal
+    const terminal = spawn_docker_terminal(container_name);
     await execute_command_dynamically(command, guide, terminal, project_dir);
   }
 

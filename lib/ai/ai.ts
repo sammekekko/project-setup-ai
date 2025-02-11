@@ -1,19 +1,29 @@
 import { openai } from "@ai-sdk/openai";
 import { generateObject, AISDKError, LanguageModelV1 } from "ai";
 import { system_prompt, initial_plan_prompt } from "./prompts";
-import { initial_plan_schema, terminal_input_schema } from "../utils/schemas";
-import { ran_commands } from "../runner";
-import { get_dependency_names, prepare_dependency_names } from "../utils/utils";
+import {
+  initial_plan_schema,
+  terminal_input_schema,
+} from "../../utils/schemas";
+import { ran_commands } from "../../runner";
+import {
+  get_dependency_names,
+  prepare_dependency_names,
+} from "../../utils/utils";
 import * as fs from "fs";
 import * as path from "path";
+import { get_context } from "./embeddings/embedding_manager";
 
 const model: LanguageModelV1 = openai("gpt-4o-2024-11-20");
 
 export async function generate_core_commands(input: string): Promise<object> {
+  const library_context = await get_context(input);
+  console.log(library_context);
+
   try {
     const result = await generateObject({
       model,
-      system: `${system_prompt}\n${initial_plan_prompt}`,
+      system: `${system_prompt}\n${initial_plan_prompt}\nLibraries that are relevant for this project: ${library_context} `,
       prompt: input,
       schema: initial_plan_schema,
       schemaName: "initial-plan-schema",
@@ -42,7 +52,7 @@ export async function generate_terminal_commands(
         dependencies: string[];
         dev_dependencies: string[];
       }
-    | { error: string | Error } = get_dependency_names(project_directory);
+    | { error: string | Error } = await get_dependency_names(project_directory);
 
   const dependency_output = prepare_dependency_names(all_dependencies);
   console.log(dependency_output);
@@ -63,10 +73,8 @@ export async function generate_terminal_commands(
       input: string,
       commands: string[]
     ): Promise<void> {
-      const logDirPath = path.dirname(
-        `/Users/samuelkekkonen/Offline Documents/business-projects/production/stackguide/project-setup-ai/generated-project/`
-      );
-      const logFilePath = path.join(logDirPath, "log.txt");
+      const logDirPath = path.dirname(process.cwd());
+      const logFilePath = path.join(logDirPath, "project-setup-ai/log.txt");
 
       const logEntry = `Input: ${input}\nCommands: ${commands.join(", ")}\n\n`;
 

@@ -1,0 +1,11 @@
+# Minimal Dockerfile using pnpm without Corepack
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install pnpm globally using npm
+RUN npm install -g pnpm
+
+# Start a shell (you can replace this with another command if needed)
+CMD ["tail", "-f", "/dev/null"]
+

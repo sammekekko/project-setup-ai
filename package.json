@@ -12,7 +12,8 @@
   },
   "scripts": {
     "start": "npx tsx runner.ts",
-    "test": "sh -c 'npx tsx tests/$1' --"
+    "test": "sh -c 'npx tsx tests/$1' --",
+    "embeddings:generate": "npx tsx lib/ai/embeddings/generate.ts"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",

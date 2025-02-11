@@ -5,31 +5,42 @@ export function strip_ansi(str: string): string {
   return str.replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, "");
 }
 
-export function get_dependency_names(
-  project_directory
-):
-  | { dependencies: string[]; dev_dependencies: string[] }
-  | { error: string | Error } {
+export async function get_dependency_names(project_directory) {
   let package_json_path = path.join(project_directory, "package.json");
-  let package_data: any;
+  let final_package_json_path = package_json_path;
 
-  // If package.json is not in the root, search immediate subdirectories.
-  if (!fs.existsSync(package_json_path)) {
-    const entries = fs.readdirSync(project_directory, { withFileTypes: true });
+  // Check if package.json exists in the root directory.
+  try {
+    await fs.promises.access(package_json_path, fs.constants.F_OK);
+  } catch (err) {
+    // If not found, search in immediate subdirectories.
     let found = false;
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const candidate = path.join(
-          project_directory,
-          entry.name,
-          "package.json"
-        );
-        if (fs.existsSync(candidate)) {
-          package_json_path = candidate;
-          found = true;
-          break;
+    try {
+      const entries = await fs.promises.readdir(project_directory, {
+        withFileTypes: true,
+      });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const candidate = path.join(
+            project_directory,
+            entry.name,
+            "package.json"
+          );
+          try {
+            await fs.promises.access(candidate, fs.constants.F_OK);
+            final_package_json_path = candidate;
+            found = true;
+            break;
+          } catch (candidateErr) {
+            // Candidate package.json does not exist; continue checking.
+          }
         }
       }
+    } catch (readDirErr) {
+      // If the directory couldn't be read, return an error.
+      const error_text = "Could not read the project directory.";
+      console.error(error_text);
+      return { error: error_text };
     }
     if (!found) {
       const error_text = "Package.json has not been built yet.";
@@ -38,15 +49,21 @@ export function get_dependency_names(
     }
   }
 
+  let package_data;
   try {
-    // Read and parse package.json
-    package_data = JSON.parse(fs.readFileSync(package_json_path, "utf-8"));
+    // Read and parse package.json asynchronously.
+    const fileContent = await fs.promises.readFile(
+      final_package_json_path,
+      "utf-8"
+    );
+    package_data = JSON.parse(fileContent);
   } catch (error) {
     const error_text = "Package.json could not be read.";
+    console.error(error_text);
     return { error: error_text };
   }
 
-  // Get the dependency names or use empty arrays if they don't exist
+  // Get dependency names or use empty arrays if they don't exist.
   const dependencies = package_data.dependencies
     ? Object.keys(package_data.dependencies)
     : [];
@@ -74,12 +91,24 @@ export function prepare_dependency_names(dependencies) {
 export const setup_log_regex = new RegExp(
   [
     "^(?:",
-    ".*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*", // Spinner chars
-    "|.*fetch\\s+GET.*", // fetch GET
+    ".*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*", // Spinner characters
+    "|.*fetch\\s+GET.*", // fetch GET messages
     "|added\\s+\\d+\\s+packages?\\s+in\\s+\\d+s", // "added 99 packages in 2s"
-    "|\\d+\\s+packages?\\s+are\\s+looking\\s+for\\s+funding", // funding
+    "|\\d+\\s+packages?\\s+are\\s+looking\\s+for\\s+funding", // funding messages
     "|npm\\s+fund", // "npm fund"
-    "|npm\\s+(?:ERR|WARN|notice|info|verb|timing|sill|http)!?.*", // npm logs
+    "|npm\\s+(?:WARN|notice|info|verb|timing|sill|http)!?.*", // npm logs
+    // --- Existing progress and download filters ---
+    "|Progress:.*", // Progress output lines
+    "|Downloading.*", // Downloading messages
+    "|node_modules\\/\\.pnpm\\/.*", // pnpm internal messages
+    "|Packages:\\s+\\+\\d+", // Package count summaries
+    // --- Additional suggestions ---
+    "|.*Running postinstall script.*", // Postinstall messages
+    "|.*done in \\d+ms.*", // Postinstall completion messages
+    "|^[+-]{5,}$", // Lines of repeated '+' or '-' characters
+    "|\\d+(\\.\\d+)?\\s*(?:B|kB|MB|GB)/\\d+(\\.\\d+)?\\s*(?:B|kB|MB|GB)", // Progress size info
+    "|.*\\.pnpm\\/.*", // Other pnpm paths (redundant if needed)
+    "|.*cache\\/.*", // Cache-related messages
     ")$",
   ].join("")
 );
