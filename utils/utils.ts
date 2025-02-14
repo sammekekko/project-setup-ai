@@ -122,14 +122,36 @@ export const key_map: Record<string, string> = {
   enter: "\r",
 };
 
+export function has_menu_structure(text: string): boolean {
+  // Check for common menu indicators
+  const menuIndicators = [
+    // Radio-style selections
+    text.includes("●") || text.includes("○"),
+    // Common CLI selection markers
+    text.includes("❯") || text.includes("→"),
+    // Square brackets style
+    /\[\s*[X\s]\s*\]/.test(text),
+    // Numbered options
+    /^\s*\d+\)\s/.test(text),
+    // Common select markers
+    text.includes("(*)") || text.includes("( )"),
+    // Arrow indicators
+    text.includes("▶") || text.includes("▷"),
+    text.includes("[?25l"), // Cursor hide sequence
+  ];
+
+  return menuIndicators.some((indicator) => indicator);
+}
+
 /**
  * Determines whether the prompt text indicates an interactive menu
  * that likely requires keystroke (arrow key) navigation.
  */
 export function is_interactive_menu(text: string): boolean {
   const lower = text.toLowerCase();
-  // Check for common interactive menu cues (adjust as needed)
+  // Check for common interactive menu cues
   const interactive_cues = [
+    "what would you like to do?",
     "arrow",
     "use arrow",
     "navigate with",
@@ -142,9 +164,16 @@ export function is_interactive_menu(text: string): boolean {
     "use arrow keys",
     "arrow-keys",
     "return to submit",
+    "●", // Unicode bullet for selected item
+    "○", // Unicode circle for unselected item
   ];
 
-  return interactive_cues.some((cue) => lower.includes(cue));
+  // Check for menu-like structure
+  const hasMenuStructure = has_menu_structure(lower);
+
+  return (
+    interactive_cues.some((cue) => lower.includes(cue)) || hasMenuStructure
+  );
 }
 
 // Helper function to detect if the given text is an interactive prompt.

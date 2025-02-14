@@ -7,7 +7,7 @@ import {
   initial_plan_schema,
   terminal_input_schema,
 } from "../../utils/schemas";
-import { ran_commands } from "../../runner";
+import { projectState } from "../../runner";
 import {
   get_dependency_names,
   prepare_dependency_names,
@@ -26,7 +26,7 @@ export async function generate_core_commands(input: string): Promise<object> {
   try {
     const result = await generateObject({
       model,
-      system: `${system_prompt}\n${initial_plan_prompt}\nLibraries that are relevant for this project: ${library_context} `,
+      system: `${system_prompt}\n${initial_plan_prompt}\nLibraries that are relevant for this project: ${library_context}`,
       prompt: input,
       schema: initial_plan_schema,
       schemaName: "initial-plan-schema",
@@ -44,6 +44,16 @@ export async function generate_core_commands(input: string): Promise<object> {
   }
 }
 
+/* 
+
+TODO, add agent chain that generates terminal inline commands. 
+First it should generate a command
+Second agent makes sures it is a good command to run/answer, otherwise it should redo it.
+
+https://sdk.vercel.ai/docs/foundations/agents#sequential-processing-chains
+
+*/
+
 export async function generate_terminal_commands(
   input: string,
   guide: string,
@@ -59,12 +69,12 @@ export async function generate_terminal_commands(
     path.join(project_directory)
   );
   const dependency_output = prepare_dependency_names(all_dependencies);
-  console.log(project_directory);
+  const ran_commands = projectState.commands.pending;
 
   try {
     const object = await generateObject({
       model,
-      system: `\n'${guide}'\nYour mission is to finish the inputted command's execution by following it's instructions or interactive prompts. ${prompt_injection}These are the commands that you have ran before this:\n${ran_commands}\nNever repeat the same commands\n${dependency_output}'`,
+      system: `\n'${guide}'\nYour mission is to finish the inputted command's execution by following it's instructions or interactive prompts. ${prompt_injection}\nThese are the commands that you have ran before this:\n${ran_commands}\nYou are working in this directory: ${project_directory}\nHere are the currently installed dependencies${dependency_output}'`,
       prompt: input,
       schema: terminal_input_schema,
       schemaName: "terminal-in-line-command-schema",

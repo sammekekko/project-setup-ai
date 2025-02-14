@@ -3,11 +3,10 @@ import { existsSync, mkdirSync } from "fs";
 import path from "path";
 import { initial_plan_schema } from "./utils/schemas";
 import { TypeOf } from "zod";
-import {
-  spawn_docker_terminal,
-  create_and_start_docker_container,
-} from "./docker/docker";
+import { dockerManager, DockerError } from "./docker/docker";
 import { IPty } from "@lydell/node-pty";
+import { ProjectErrorHandler } from "./lib/project/error_handler";
+import { DEFAULT_CONFIG } from "./config";
 
 /* LIBRARIES */
 import {
@@ -34,17 +33,39 @@ import {
 
 dotenv.config();
 
-export let core_commands: string[] = [];
-export const ran_commands: string[] = [];
-export const finished_core_commands: string[] = [];
+// Project state interface for tracking
+interface ProjectState {
+  project_dir: string;
+  container_name: string;
+  current_dir: string;
+  core_commands: string[];
+  commands: {
+    completed: string[];
+    failed: string[];
+    pending: string[];
+  };
+}
 
-let current_dir: string;
+// Initialize project state
+export let projectState: ProjectState = {
+  project_dir: "",
+  container_name: "",
+  current_dir: "",
+  core_commands: [],
+  commands: {
+    completed: [],
+    failed: [],
+    pending: [],
+  },
+};
+
+// Initialize error handler
+const errorHandler = new ProjectErrorHandler();
 
 // Update the current directory if the command is a "cd" command.
 function update_current_dir(command: string): void {
-  console.log("Updating current div");
-  console.log("Starts with CD: ", command.startsWith("cd "));
   const trimmed = command.trim();
+  const current_dir = projectState.current_dir;
   if (trimmed.startsWith("cd ")) {
     // Extract the directory from the command.
     const target_dir = trimmed.slice(3).trim();
@@ -52,265 +73,318 @@ function update_current_dir(command: string): void {
     const new_dir = path.resolve(current_dir, target_dir);
 
     if (existsSync(new_dir)) {
-      console.log(`Changing directory to: ${new_dir}`);
-      current_dir = new_dir;
+      projectState.current_dir = new_dir;
     } else {
       console.error(
         `cd command failed: Directory "${new_dir}" does not exist.`
       );
-      // Optionally, you can choose to leave currentDir unchanged or handle the error differently.
     }
   }
 }
 
 function run_command(terminal: IPty, input: string) {
-  update_current_dir(input);
-  terminal.write(input);
-  ran_commands.push(input);
+  try {
+    update_current_dir(input);
+    terminal.write(input);
+    projectState.commands.pending.push(input);
+  } catch (error) {
+    errorHandler.onCommandFail(input, error as Error);
+    throw error;
+  }
 }
 
 /**
  * Writes a command to the terminal and logs it.
  */
-
-async function execute_command_dynamically(
+export async function execute_command_dynamically(
   command: string,
   guide: string,
-  terminal: IPty,
-  projectDir: string
+  terminal: IPty
 ): Promise<void> {
   let keystrokesActive: boolean = false;
-
-  // A variable to store the most recent output (without ANSI codes)
   let latest_output = "";
   let latest_command = command;
-  // A timer that will trigger after a given idle period
   let idle_timer: NodeJS.Timeout | null = null;
-  // The idle delay (in milliseconds) to consider the output as “settled”
   const idle_delay = 2000;
 
-  run_command(terminal, command + "\r");
+  try {
+    run_command(terminal, command + "\r");
+    const current_dir = projectState.current_dir;
 
-  // This function ensures that interaction cues only will be used if
-  // the output has been idle for IDLE_DELAY amount of time
-  const onIdleOutput = async () => {
-    // Make sure that the AI isn't writing anything during this time
-    if (keystrokesActive) return;
-    if (is_interactive_menu(latest_output)) {
-      keystrokesActive = true;
-      const output_log = `The command\n"${latest_command}\n produced the following interactive prompt:\n"${strip_ansi(
-        JSON.stringify(latest_output)
-      )}"\nWhat keystrokes should I use?`;
-      try {
-        const keyResponses = await generate_terminal_commands(
-          output_log,
-          guide,
-          current_dir,
-          interactive_arrow_system_prompt
-        );
-        for (const key of keyResponses) {
-          const norm = key.toLowerCase().trim();
-          await run_command(terminal, key_map[norm] ?? key);
-        }
-      } catch (err) {
-        console.error("Error obtaining interactive keystroke:", err);
-      } finally {
-        keystrokesActive = false;
+    const onIdleOutput = async () => {
+      if (keystrokesActive) {
+        return;
       }
-    } else if (is_prompt(latest_output)) {
-      keystrokesActive = true;
-      const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${strip_ansi(
-        JSON.stringify(latest_output)
-      )}"\nAnd you are currently writing in this directory: ${current_dir}\nWhat should I write?`;
-      try {
-        const responses = await generate_terminal_commands(
-          output_log,
-          guide,
-          current_dir,
-          write_inline_system_prompt
-        );
-        for (const resp of responses) {
-          run_command(terminal, resp + "\r"); // Send response + Enter
-          latest_command = resp;
-        }
-      } catch (error) {
-        console.error("Error obtaining textual prompt response:", error);
-      } finally {
-        keystrokesActive = false;
-      }
-    } else {
-      /* If the terminal has stopped outputting for two seconds and the 'latestOutput'
-       * is not passed by any of the 'isPrompt()', or 'isInteractiveMenu()' checks
-       * it will anyways go through by sending the latestOutput awaiting instructions.
-       */
 
-      keystrokesActive = true;
-      const output_log = `The command:\n'${latest_command}' produced the following output:\n"${strip_ansi(
-        JSON.stringify(latest_output)
-      )}"\nAnd you are currently writing in this directory: ${current_dir}\nWhat should I write?`;
-      if (latest_command === "") {
-        terminal.kill();
-      }
-      try {
-        const responses = await generate_terminal_commands(
-          output_log,
-          guide,
-          current_dir,
-          idle_with_no_interactivity
-        );
-        if (responses.length == 0 || !responses || responses[0] == "") {
-          /* This will start a new terminal and start executing the next command */
+      if (is_interactive_menu(latest_output)) {
+        keystrokesActive = true;
+        const output_log = `The command\n"${latest_command}\n produced the following interactive prompt:\n"${strip_ansi(
+          JSON.stringify(latest_output)
+        )}"\nWhat keystrokes should I use?`;
+        try {
+          const keyResponses = await generate_terminal_commands(
+            output_log,
+            guide,
+            current_dir,
+            interactive_arrow_system_prompt
+          );
+          for (const key of keyResponses) {
+            const norm = key.toLowerCase().trim();
+            await run_command(terminal, key_map[norm] ?? key);
+          }
+        } catch (err) {
+          console.error("Error obtaining interactive keystroke:", err);
+          projectState.commands.failed.push(command);
+        } finally {
+          keystrokesActive = false;
+        }
+      } else if (is_prompt(latest_output)) {
+        keystrokesActive = true;
+        const output_log = `The command:\n'${latest_command}' produced the following prompt:\n"${strip_ansi(
+          JSON.stringify(latest_output)
+        )}"\\nWhat should I write?`;
+        try {
+          const responses = await generate_terminal_commands(
+            output_log,
+            guide,
+            current_dir,
+            write_inline_system_prompt
+          );
+          for (const resp of responses) {
+            run_command(terminal, resp + "\r");
+            latest_command = resp;
+          }
+        } catch (error) {
+          console.error("Error obtaining textual prompt response:", error);
+          projectState.commands.failed.push(command);
+        } finally {
+          keystrokesActive = false;
+        }
+      } else {
+        keystrokesActive = true;
+        const output_log = `The command:\n'${latest_command}' produced the following output:\n"${strip_ansi(
+          JSON.stringify(latest_output)
+        )}"\nWhat should I write?`;
+        if (latest_command === "") {
           terminal.kill();
         }
-        for (const resp of responses) {
-          run_command(terminal, resp + "\r"); // Send response + Enter
-          latest_command = resp;
-          // console.log("Response sent", resp, "for this output:", latestOutput);
+        try {
+          const responses = await generate_terminal_commands(
+            output_log,
+            guide,
+            current_dir,
+            idle_with_no_interactivity
+          );
+          if (responses.length == 0 || !responses || responses[0] == "") {
+            terminal.kill();
+          }
+          for (const resp of responses) {
+            run_command(terminal, resp + "\r");
+            latest_command = resp;
+          }
+        } catch (error) {
+          console.error("Error obtaining textual prompt response:", error);
+          projectState.commands.failed.push(command);
+        } finally {
+          keystrokesActive = false;
         }
-      } catch (error) {
-        console.error("Error obtaining textual prompt response:", error);
-      } finally {
-        keystrokesActive = false;
       }
-    }
+      latest_output = "";
+    };
+    terminal.onData(async (data) => {
+      if (keystrokesActive) return;
 
-    // Clear the latest output after processing.
-    latest_output = "";
-  };
+      // If we detect menu indicators (❯, ●, ○), don't strip ANSI codes yet
+      if (is_interactive_menu(data)) {
+        // This is menu data - accumulate it as is
+        latest_output += data;
+      } else {
+        // Normal processing for non-menu output
+        const output = strip_ansi(data);
+        const lines = output.split("\n");
+        const filtered = lines.filter((line) => !setup_log_regex.test(line));
 
-  // Listen to terminal data events.
-  terminal.onData(async (data) => {
-    // If a keystroke sequence is already active, ignore new data.
-    console.log(data);
-    if (keystrokesActive) {
-      return;
-    }
-    const output = strip_ansi(data);
+        if (filtered.join("\n") != "") {
+          latest_output += filtered.join("\n");
+        } else {
+          latest_output +=
+            "```LOGS WERE FILTERED BUT INSTALL SCRIPT ARE RUNNING / ARE DONE```";
+        }
+      }
 
-    const lines = output.split("\n");
-    const filtered = lines.filter((line) => !setup_log_regex.test(line));
+      console.log(data);
 
-    if (filtered.join("\n") != "") {
-      latest_output += filtered;
-    } else {
-      latest_output =
-        "```LOGS WERE FILTERED BUT INSTALL SCRIPT ARE RUNNING / ARE DONE```";
-    }
-
-    // Clear any pending idle timer because we just got new output.
-    if (idle_timer) {
-      clearTimeout(idle_timer);
-    }
-
-    idle_timer = setTimeout(onIdleOutput, idle_delay);
-  });
-
-  // Finish when the shell session ends.
-  return new Promise<void>((resolve) => {
-    terminal.onExit((code) => {
-      const exitText = `\nCommand "${command}" exited with code ${code.exitCode}\n`;
-      console.log(exitText);
-      finished_core_commands.push(exitText);
-      // Clear the timer if still pending.
       if (idle_timer) {
         clearTimeout(idle_timer);
       }
-      resolve();
+      idle_timer = setTimeout(onIdleOutput, idle_delay);
     });
-  });
-}
 
-/**
- * Main entry point.
- * Given a project description, this function:
- *   1. Creates a new project directory outside your code.
- *   2. Writes initial files in project folder (not yet)
- *   3. Asks the AI for a list of terminal commands to set up the project.
- *   4. Executes each command in the project directory.
- *   5. Uses cues to figure out if interactive actions are needed.
- */
+    // Add timeout handling
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            `Command timed out after ${DEFAULT_CONFIG.resourceLimits.timeout}ms`
+          )
+        );
+      }, DEFAULT_CONFIG.resourceLimits.timeout);
+    });
+
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        terminal.onExit((code) => {
+          const exitText = `\nCommand "${command}" exited with code ${code.exitCode}\n`;
+          console.log(exitText);
+
+          if (code.exitCode === 0) {
+            projectState.commands.completed.push(command);
+          } else {
+            projectState.commands.failed.push(command);
+          }
+
+          if (idle_timer) {
+            clearTimeout(idle_timer);
+          }
+          resolve();
+        });
+      }),
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    try {
+      await errorHandler.retry(command, 3);
+    } catch (retryError) {
+      throw retryError;
+    }
+  }
+}
 
 async function main(project_description: string) {
-  // Create the project directory
-  const project_dir = path.resolve(process.cwd(), "generated-project");
-  if (!existsSync(project_dir)) {
-    console.log(`Creating project directory at: ${project_dir}`);
-    mkdirSync(project_dir, { recursive: true });
-  } else {
-    console.log(`Project directory already exists at: ${project_dir}`);
-  }
-
-  current_dir = project_dir;
-
-  // Create and start the Docker container
-  let container_name: string;
   try {
-    container_name = await create_and_start_docker_container(project_dir);
-  } catch (err) {
-    console.error("Error setting up Docker container:", err);
-    process.exit(1);
-  }
+    // Create the project directory
+    const project_dir = path.resolve(process.cwd(), "generated-project");
+    let current_dir = projectState.current_dir;
 
-  const object = (await generate_core_commands(project_description)) as TypeOf<
-    typeof initial_plan_schema
-  >;
-  core_commands = object.core_commands;
-  const guide = object.initial_plan;
-
-  console.log("Guide:", guide);
-  console.log("Core Commands:", core_commands);
-
-  // First check if the command is a package installation command
-  function is_install_command(command: string): boolean {
-    return command.match(/^(npm|pnpm|yarn|pip) (i|install|add) /) !== null;
-  }
-
-  // Extract package name from install command
-  function extract_package_name(command: string): string {
-    const matches = command.match(
-      /^(?:npm|pnpm|yarn|pip) (?:i|install|add) ([@\w\/-]+)(?:@\S+)?/
-    );
-    return matches ? matches[1] : "";
-  }
-
-  // Execute each command sequentially in the project directory
-  for (const command of core_commands) {
-    const current_dependencies = await get_dependency_names(current_dir);
-
-    // Check for error in getting dependencies
-    if (
-      "error" in current_dependencies &&
-      current_dependencies instanceof Error
-    ) {
-      console.error(current_dependencies.error);
-      continue;
+    if (!existsSync(project_dir)) {
+      console.log(`Creating project directory at: ${project_dir}`);
+      mkdirSync(project_dir, { recursive: true });
+    } else {
+      console.log(`Project directory already exists at: ${project_dir}`);
     }
 
-    // If it's an install command, check if package is already installed
-    if (is_install_command(command) && !("error" in current_dependencies)) {
-      const package_name = extract_package_name(command);
-      const all_deps = [
-        ...current_dependencies.dependencies,
-        ...current_dependencies.dev_dependencies,
-      ];
+    current_dir = project_dir;
 
-      if (all_deps.includes(package_name)) {
-        console.log(
-          `Skipping installation of ${package_name} - already installed`
+    // Initialize project state
+    projectState.project_dir = project_dir;
+    projectState.current_dir = current_dir;
+
+    // Create and start the Docker container using the new manager
+    try {
+      projectState.container_name =
+        await dockerManager.create_and_start_docker_container(
+          project_dir,
+          DEFAULT_CONFIG.resourceLimits
         );
-        continue;
+
+      if (
+        !(await dockerManager.is_container_healthy(projectState.container_name))
+      ) {
+        throw new DockerError("Container health check failed");
+      }
+    } catch (err) {
+      await errorHandler.onContainerFail(
+        projectState.container_name,
+        err as Error
+      );
+      throw err;
+    }
+
+    try {
+      const object = (await generate_core_commands(
+        project_description
+      )) as TypeOf<typeof initial_plan_schema>;
+      const core_commands = object.core_commands;
+      projectState.core_commands = [...core_commands];
+      const guide = object.initial_plan;
+
+      console.log("Guide:", guide);
+      console.log("Core Commands:", core_commands);
+
+      function is_install_command(command: string): boolean {
+        return command.match(/^(npm|pnpm|yarn|pip) (i|install|add) /) !== null;
+      }
+
+      function extract_package_name(command: string): string {
+        const matches = command.match(
+          /^(?:npm|pnpm|yarn|pip) (?:i|install|add) ([@\w\/-]+)(?:@\S+)?/
+        );
+        return matches ? matches[1] : "";
+      }
+
+      // Execute each command sequentially in the project directory
+      for (const command of core_commands) {
+        const current_dependencies = await get_dependency_names(current_dir);
+
+        if (
+          "error" in current_dependencies &&
+          current_dependencies instanceof Error
+        ) {
+          console.error(current_dependencies.error);
+          projectState.commands.failed.push(command);
+          continue;
+        }
+
+        if (is_install_command(command) && !("error" in current_dependencies)) {
+          const package_name = extract_package_name(command);
+          const all_deps = [
+            ...current_dependencies.dependencies,
+            ...current_dependencies.dev_dependencies,
+          ];
+
+          if (all_deps.includes(package_name)) {
+            console.log(
+              `Skipping installation of ${package_name} - already installed`
+            );
+            projectState.commands.completed.push(command);
+            continue;
+          }
+        }
+
+        // Use dockerManager to spawn terminal
+        const terminal = dockerManager.spawn_docker_terminal(
+          projectState.container_name
+        );
+        await execute_command_dynamically(command, guide, terminal);
+      }
+
+      console.log("Project setup complete!");
+      console.log(
+        "Completed commands:",
+        projectState.commands.completed.length
+      );
+      console.log("Failed commands:", projectState.commands.failed.length);
+    } catch (error) {
+      console.error("Error during command execution:", error);
+      throw error;
+    } finally {
+      // Ensure container cleanup
+      if (projectState.container_name) {
+        await dockerManager.cleanup_container(projectState.container_name);
       }
     }
-
-    // Use the container_name instead of project_dir when spawning the terminal
-    const terminal = spawn_docker_terminal(container_name);
-    await execute_command_dynamically(command, guide, terminal, project_dir);
+  } catch (error) {
+    console.error("Error during project setup:", error);
+    throw error;
+  } finally {
+    // Ensure container cleanup after server is closed
+    if (projectState.container_name) {
+      await dockerManager.cleanup_container(projectState.container_name);
+    }
   }
-
-  console.log("Project setup complete!");
 }
 
-// Retrieve the project description from a command line argument.
+// Run if script is called directly
 const project_description = process.argv.slice(2).join(" ");
 if (!project_description) {
   console.error(
