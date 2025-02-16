@@ -5,6 +5,36 @@ export function strip_ansi(str: string): string {
   return str.replace(/\x1B\[[0-?]*[ -\/]*[@-~]/g, "");
 }
 
+export function is_shell_prompt(output: string, lastCommand: string): boolean {
+  // First remove ANSI control sequences
+  const cleanOutput = output
+    .replace(/\^[[][^]*?[a-zA-Z]/g, "") // Remove control sequences like ^[[22;8R
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\"/g, '"')
+    .replace(/^"|"$/g, "")
+    .trim();
+
+  // Split and get last meaningful line
+  const lines = cleanOutput.split("\n").filter((line) => line.trim() !== ""); // Remove empty lines
+
+  if (lines.length === 0) return false;
+
+  const lastLine = lines[lines.length - 1].trim();
+
+  if (is_interactive_menu(cleanOutput) || is_prompt(cleanOutput)) {
+    return false;
+  }
+
+  const isPrompt = lastLine.match(/\/app(?:\/[\w-]+)*\s+#\s*$/);
+
+  // For simple commands, make sure we're not catching an echo
+  if (lines.length === 1 && lastLine.includes(lastCommand)) {
+    return false;
+  }
+
+  return !!isPrompt;
+}
+
 export async function get_dependency_names(project_directory) {
   let package_json_path = path.join(project_directory, "package.json");
   let final_package_json_path = package_json_path;

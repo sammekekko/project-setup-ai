@@ -1,6 +1,6 @@
 import { projectState } from "../../runner";
 import { dockerManager } from "../../docker/docker";
-import { execute_command_dynamically } from "../../runner";
+// import { execute_command_dynamically } from "../../runner";
 import { SECURITY_CONFIG } from "../../config";
 
 interface ErrorHandler {
@@ -34,9 +34,9 @@ export class ProjectErrorHandler implements ErrorHandler {
     console.error(`Command failed: ${command}`);
     console.error(`Error: ${error.message}`);
 
-    if (projectState) {
-      projectState.commands.failed.push(command);
-    }
+    // if (projectState) {
+    //   projectState.commands.failed.push(command);
+    // }
 
     // Log the error for debugging
     console.error(`Full error details:`, error);
@@ -62,11 +62,11 @@ export class ProjectErrorHandler implements ErrorHandler {
         const terminal = dockerManager.spawn_docker_terminal(
           projectState.container_name
         );
-        await execute_command_dynamically(
-          command,
-          projectState.current_dir,
-          terminal
-        );
+        // await execute_command_dynamically(
+        //   command,
+        //   projectState.current_dir,
+        //   terminal
+        // );
         return; // Success
       } catch (error) {
         attempts++;

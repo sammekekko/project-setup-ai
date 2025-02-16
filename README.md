@@ -12,8 +12,9 @@ This tool will from a user prompt generate a boilerplate project. At its current
 ## Strategy
 
 - It uses a buffer technique to detect whether the output of the console is done outputting, the buffer **idle_delay** is configurable in _runner.ts_
-- Multiple agents specialized at different tasks. Current agents' tasks: **Generating Core Setup Commands**, **Generating terminal commands that are required at runtime**
+- Multiple agents specialized at different tasks. Current agents: **Supervisor - Controls every other agent**, **Terminal Controller - writes terminal commands, and can answer to questions asked by setup commands**, **Code Generator - Generates high quality code in a file**, **Project Creator - Initiates the project and uses RAG to get libraries that are relevant**, **File Creator - Generates files and writes text in these (useful for README, and such)**, and at last **Reviewer - Analyses the project and code written, to make sure everything is made in to match the project description**
 - Using embeddings to create a RAG-model that provides the most compatible tools from a vector store based on _/resources/libraries.txt_
+- Generate the project within a dockerized environment to avoid commands being ran in the server.
 
 ## Upcoming features
 
